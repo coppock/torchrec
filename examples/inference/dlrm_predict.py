@@ -124,9 +124,10 @@ class DLRMPredictModule(PredictModule):
 
 
 class DLRMPredictFactory(PredictFactory):
-    def __init__(self) -> None:
-        self.model_config: DLRMModelConfig = load_pickle_config(
-            "config.pkl", DLRMModelConfig
+    def __init__(self, config: Optional[DLRMModelConfig]) -> None:
+        self.model_config: DLRMModelConfig = (
+            config if config is not None
+                else load_pickle_config("config.pkl", DLRMModelConfig)
         )
 
     def create_predict_module(self, world_size: int) -> torch.nn.Module:
