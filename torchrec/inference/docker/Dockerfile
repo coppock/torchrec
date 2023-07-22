@@ -1,20 +1,17 @@
-FROM sahanp465/multipy:latest as multipy-docker
+FROM multipy
 
 COPY . .
 
 # Install sys deps
 RUN apt-get update && \
     apt-get upgrade -y && \
-    apt-get install -y git
-RUN apt-get install m4
-RUN apt-get install vim
+    apt-get install -y git m4
 
 # folly
 RUN git clone https://github.com/facebook/folly.git && \
     cd folly && \
     git reset --hard 8656af7fe21f6abd9f14c385e6bcc3d209f1db06 && \
-    cd ..
-RUN python3 ./build/fbcode_builder/getdeps.py --scratch-path /workspace/folly-build/ --allow-system-packages build
+    python3 ./build/fbcode_builder/getdeps.py --scratch-path /workspace/folly-build/ --allow-system-packages build
 
 # grpc
 RUN mkdir $HOME/.local
