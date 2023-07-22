@@ -13,7 +13,7 @@ from torchrec.datasets.utils import Batch
 from torchrec.modules.crossnet import LowRankCrossNet
 from torchrec.modules.embedding_modules import EmbeddingBagCollection
 from torchrec.modules.mlp import MLP
-from torchrec.sparse.jagged_tensor import KeyedJaggedTensor, KeyedTensor
+from torchrec.sparse.jagged_tensor import JaggedTensor, KeyedJaggedTensor, KeyedTensor
 
 
 def choose(n: int, k: int) -> int:
@@ -110,6 +110,48 @@ class SparseArch(nn.Module):
     @property
     def sparse_feature_names(self) -> List[str]:
         return self._sparse_feature_names
+
+
+class SparseArchUnsharded(nn.Module):
+    def __init__(
+        self,
+        num_embeddings_per_feature: List[int],
+        embedding_dim: int,
+    ) -> None:
+        super().__init__()
+        self.embedding_bags: List[torch.nn.EmbeddingBag] = torch.nn.ModuleList(
+            torch.nn.EmbeddingBag(num_embeddings, embedding_dim)
+                for num_embeddings in num_embeddings_per_feature
+        )
+        self.D: int = embedding_dim
+        self.F: int = len(num_embeddings_per_feature)
+
+    def forward(
+        self,
+        features: List[Tuple[torch.Tensor, torch.Tensor]],
+    ) -> torch.Tensor:
+        # Check feature size.
+        assert len(features) == self.F
+        # Check batch sizes.
+        features_iter = (feature.offsets() for feature in features)
+        first = next(features_iter)
+        assert len(first.size()) == 1
+        B: int = first.size(0)
+        assert all(B == x.size(0) for x in features_iter)
+
+        sparse_values: List[torch.Tensor] = [
+            eb(feature[0], feature[1])
+                for feature, eb in zip(features, self.embedding_bags)
+        ]
+
+        return torch.cat(
+            (t.unsqueeze(1) for t in sparse_values),
+            dim=1,
+        )
+
+    @property
+    def num_features(self) -> int:
+        return self.F
 
 
 class DenseArch(nn.Module):
@@ -574,6 +616,71 @@ class DLRM(nn.Module):
         concatenated_dense = self.inter_arch(
             dense_features=embedded_dense, sparse_features=embedded_sparse
         )
+        logits = self.over_arch(concatenated_dense)
+        return logits
+
+
+class DLRM_DCN_Unsharded(nn.Module):
+    def __init__(
+        self,
+        num_embeddings_per_feature: List[int],
+        dense_in_features: int,
+        dense_arch_layer_sizes: List[int],
+        over_arch_layer_sizes: List[int],
+        dcn_num_layers: int,
+        dcn_low_rank_dim: int,
+        dense_device: Optional[torch.device] = None,
+    ) -> None:
+        super().__init__()
+
+        self.dense_arch = DenseArch(
+            dense_in_features,
+            dense_arch_layer_sizes,
+            dense_device,
+        )
+
+        embedding_dim = dense_arch_layer_sizes[-1]
+        self.sparse_arch = SparseArchUnsharded(
+            num_embeddings_per_feature,
+            embedding_dim,
+        )
+
+        self.inter_arch = InteractionDCNArch(
+            self.sparse_arch.num_features,
+            LowRankCrossNet(
+                (self.sparse_arch.num_features + 1) * embedding_dim,
+                dcn_num_layers,
+                dcn_low_rank_dim,
+            ),
+        )
+
+        over_in_features: int = (
+            embedding_dim + choose(self.sparse_arch.num_features, 2) +
+            self.sparse_arch.num_features
+        )
+
+        self.over_arch = OverArch(
+            over_in_features,
+            over_arch_layer_sizes,
+            dense_device,
+        )
+
+    def forward(
+        self,
+        dense_features: torch.Tensor,
+        sparse_features: List[JaggedTensor],
+    ) -> torch.Tensor:
+        """
+        Args:
+            dense_features (torch.Tensor): the dense features.
+            sparse_features (KeyedJaggedTensor): the sparse features.
+
+        Returns:
+            torch.Tensor: logits.
+        """
+        embedded_dense = self.dense_arch(dense_features)
+        embedded_sparse = self.sparse_arch(sparse_features)
+        concatenated_dense = self.inter_arch(embedded_dense, embedded_sparse)
         logits = self.over_arch(concatenated_dense)
         return logits
 
