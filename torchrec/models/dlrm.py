@@ -133,7 +133,7 @@ class SparseArchUnsharded(nn.Module):
         # Check feature size.
         assert len(features) == self.F
         # Check batch sizes.
-        features_iter = (feature.offsets() for feature in features)
+        features_iter = (feature[1] for feature in features)
         first = next(features_iter)
         assert len(first.size()) == 1
         B: int = first.size(0)
@@ -145,7 +145,7 @@ class SparseArchUnsharded(nn.Module):
         ]
 
         return torch.cat(
-            (t.unsqueeze(1) for t in sparse_values),
+            list(t.unsqueeze(1) for t in sparse_values),
             dim=1,
         )
 
@@ -655,9 +655,7 @@ class DLRM_DCN_Unsharded(nn.Module):
         )
 
         over_in_features: int = (
-            embedding_dim + choose(self.sparse_arch.num_features, 2) +
-            self.sparse_arch.num_features
-        )
+            self.sparse_arch.num_features + 1) * embedding_dim
 
         self.over_arch = OverArch(
             over_in_features,
